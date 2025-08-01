@@ -299,10 +299,10 @@ MIT License - see LICENSE file for details
 
 ## Credits & Acknowledgments
 
-This project is based on the excellent work by [James Kershaw](https://github.com/JKershaw) on the original [code-analyzer](https://github.com/JKershaw/code-analyzer). This MCP version extends James's concept to integrate seamlessly with Claude Desktop through the Model Context Protocol.
+This project is based on the excellent work by [John Kershaw](https://github.com/JKershaw) on the original [code-analyzer](https://github.com/JKershaw/code-analyzer). This MCP version extends John's concept to integrate seamlessly with Claude Desktop through the Model Context Protocol.
 
 Special thanks to:
-- [James Kershaw](https://github.com/JKershaw) for the original code-analyzer inspiration and architecture
+- [John Kershaw](https://github.com/JKershaw) for the original code-analyzer inspiration and architecture
 - The [Model Context Protocol](https://modelcontextprotocol.io) team for making Claude integrations possible
 - [Anthropic](https://anthropic.com) for Claude and the AI analysis capabilities
 
