@@ -12,6 +12,10 @@ import { glob } from 'glob';
 import { RepoAnalyzer } from './utils/repo-analyzer.js';
 import { ExclusionManager } from './utils/exclusion-manager.js';
 import { LLMInterface } from './utils/llm-interface.js';
+import { CostCalculator } from './utils/cost-calculator.js';
+import { AnalysisMetrics } from './utils/analysis-metrics.js';
+import { MetaReportGenerator } from './utils/meta-report-generator.js';
+import { RepoScanner } from './utils/repo-scanner.js';
 
 // Agent configurations
 const AGENT_CONFIGS = {
@@ -98,6 +102,10 @@ class CodeAnalyzerMCP {
     this.repoAnalyzer = new RepoAnalyzer();
     this.exclusionManager = new ExclusionManager(process.cwd());
     this.llmInterface = new LLMInterface();
+    this.costCalculator = new CostCalculator();
+    this.analysisMetrics = new AnalysisMetrics();
+    this.metaReportGenerator = new MetaReportGenerator();
+    this.repoScanner = new RepoScanner();
   }
 
   setupHandlers() {
@@ -164,6 +172,26 @@ class CodeAnalyzerMCP {
             },
             required: ['path']
           }
+        },
+        {
+          name: 'scan_repository',
+          description: 'Pre-scan a repository to estimate analysis cost and complexity',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              path: {
+                type: 'string',
+                description: 'Path to the repository'
+              },
+              model: {
+                type: 'string',
+                enum: ['claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022'],
+                description: 'Model to use for cost estimation',
+                default: 'claude-3-5-sonnet-20241022'
+              }
+            },
+            required: ['path']
+          }
         }
       ]
     }));
@@ -182,6 +210,9 @@ class CodeAnalyzerMCP {
         case 'get_repository_info':
           return await this.getRepositoryInfo(args);
         
+        case 'scan_repository':
+          return await this.scanRepository(args);
+        
         default:
           throw new Error(`Unknown tool: ${name}`);
       }
@@ -192,6 +223,9 @@ class CodeAnalyzerMCP {
     const { path: repoPath, agents = Object.keys(AGENT_CONFIGS), exclude = [] } = args;
 
     try {
+      // Initialize metrics for this analysis
+      this.analysisMetrics.startAnalysis();
+      const startTime = Date.now();
       // Set up exclusions
       this.exclusionManager.addPatterns(exclude);
       
@@ -416,6 +450,57 @@ class CodeAnalyzerMCP {
     }
     
     return [...new Set(suggested)];
+  }
+
+  async scanRepository(args) {
+    const { path: repoPath, model = 'claude-3-5-sonnet-20241022' } = args;
+    
+    try {
+      // Use the repo scanner to analyze the repository
+      const scanResult = await this.repoScanner.scanRepository(repoPath, {
+        model,
+        excludePatterns: this.exclusionManager.patterns
+      });
+      
+      // Calculate estimated costs
+      const costEstimate = this.costCalculator.calculateCost({
+        inputTokens: scanResult.estimatedTokens,
+        outputTokens: Math.floor(scanResult.estimatedTokens * 0.3), // Estimate 30% output
+        model
+      });
+      
+      return {
+        content: [{
+          type: 'text',
+          text: JSON.stringify({
+            repository: repoPath,
+            summary: scanResult.summary,
+            metrics: {
+              totalFiles: scanResult.totalFiles,
+              analyzableFiles: scanResult.analyzableFiles,
+              totalLines: scanResult.totalLines,
+              estimatedTokens: scanResult.estimatedTokens
+            },
+            costEstimate: {
+              model,
+              estimatedInputTokens: scanResult.estimatedTokens,
+              estimatedOutputTokens: Math.floor(scanResult.estimatedTokens * 0.3),
+              estimatedCost: `$${costEstimate.toFixed(2)}`,
+              breakdown: this.costCalculator.getModelPricing(model)
+            },
+            recommendations: scanResult.recommendations
+          }, null, 2)
+        }]
+      };
+    } catch (error) {
+      return {
+        isError: true,
+        content: [{
+          type: 'text',
+          text: `Failed to scan repository: ${error.message}`
+        }]
+      };
+    }
   }
 
   async run() {

@@ -49,7 +49,6 @@ export class SecureCLIParser {
     this.securityRules = {
       // Forbidden patterns that could indicate attacks
       forbiddenPatterns: [
-        /\.\.\//g,           // Path traversal
         /[;&|`]/g,           // Command injection
         /\$\(/g,             // Command substitution
         /\${/g,              // Variable expansion
@@ -394,8 +393,8 @@ export class SecureCLIParser {
    * Validates a file system path.
    */
   validatePath(path, context) {
-    // Check for path traversal attempts
-    if (path.includes('..')) {
+    // Check for dangerous path traversal attempts
+    if (this.isDangerousPath(path)) {
       this.errors.push(`Path traversal detected in ${context}: ${path}`);
     }
     
@@ -408,6 +407,55 @@ export class SecureCLIParser {
     if (this.patterns.commandInjection.test(path)) {
       this.errors.push(`Potentially unsafe characters in ${context}: ${path}`);
     }
+  }
+
+  /**
+   * Determines if a path contains dangerous traversal patterns.
+   * Allows safe relative paths like ../sibling-dir but blocks malicious ones.
+   */
+  isDangerousPath(path) {
+    // Normalize the path to check for dangerous patterns
+    const normalizedPath = path.replace(/\\/g, '/'); // Convert Windows paths
+    
+    // Block paths that try to escape to system directories
+    const dangerousPatterns = [
+      /\.\.[\/\\]\.\.[\/\\]/,  // Multiple levels up (../../)
+      /^[\/\\]/,               // Absolute paths starting with / or \
+      /^[a-zA-Z]:[\/\\]/,      // Windows absolute paths (C:\)
+      /\/etc[\/\\]/,           // Unix system directories
+      /\/usr[\/\\]/,
+      /\/bin[\/\\]/,
+      /\/sbin[\/\\]/,
+      /\/var[\/\\]/,
+      /\/tmp[\/\\]/,
+      /\/root[\/\\]/,
+      /\/home[\/\\][^\/\\]+[\/\\]\./,  // Hidden files in home directories
+      /\\Windows[\\\/]/i,      // Windows system directories
+      /\\System32[\\\/]/i,
+      /\\Program Files[\\\/]/i,
+      /\.\.[\/\\][a-zA-Z0-9_-]*[\/\\]\./  // Traversal to hidden files
+    ];
+    
+    // Check for dangerous patterns
+    for (const pattern of dangerousPatterns) {
+      if (pattern.test(normalizedPath)) {
+        return true;
+      }
+    }
+    
+    // Allow simple sibling directory access (one level up only)
+    // Pattern: ../valid-directory-name (no further traversal)
+    const safeSiblingPattern = /^\.\.\/[a-zA-Z0-9._-]+([\/\\][a-zA-Z0-9._-]+)*\/?$/;
+    if (safeSiblingPattern.test(normalizedPath)) {
+      return false; // This is safe
+    }
+    
+    // Block any other .. patterns that weren't explicitly allowed
+    if (normalizedPath.includes('..')) {
+      return true;
+    }
+    
+    return false; // Path is safe
   }
 
   /**

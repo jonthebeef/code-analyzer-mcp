@@ -30,6 +30,14 @@ Based on and inspired by [JKershaw's original code-analyzer](https://github.com/
 - Support for multiple programming languages
 - Configurable analysis scope
 
+### 💰 Cost Management & Analytics (NEW)
+
+- Pre-analysis repository scanning with cost estimation
+- Real-time token usage and cost tracking
+- Model-specific pricing calculations
+- Performance metrics and analysis efficiency reporting
+- Detailed cost breakdowns per agent and analysis run
+
 ## Installation
 
 ### Prerequisites
@@ -74,7 +82,7 @@ Based on and inspired by [JKershaw's original code-analyzer](https://github.com/
 
 ## Usage
 
-Once installed, the Code Analyzer MCP provides three main tools in Claude:
+Once installed, the Code Analyzer MCP provides four main tools in Claude:
 
 ### 1. Analyze Repository
 Performs a comprehensive analysis of an entire repository.
@@ -114,6 +122,19 @@ Parameters:
 
 Example in Claude:
 > "What's the structure of the repository at /path/to/project?"
+
+### 4. Scan Repository (NEW)
+Pre-scans a repository to estimate analysis cost and complexity before running full analysis.
+
+```
+Tool: scan_repository
+Parameters:
+- path: Path to the repository
+- model: (optional) Model to use for cost estimation (claude-3-5-sonnet-20241022 or claude-3-5-haiku-20241022)
+```
+
+Example in Claude:
+> "Scan the repository at /path/to/project to estimate analysis costs"
 
 ## Configuration
 
