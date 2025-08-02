@@ -30,13 +30,13 @@ Based on and inspired by [JKershaw's original code-analyzer](https://github.com/
 - Support for multiple programming languages
 - Configurable analysis scope
 
-### 💰 Cost Management & Analytics (NEW)
+### 📊 Repository Intelligence (NEW)
 
-- Pre-analysis repository scanning with cost estimation
-- Real-time token usage and cost tracking
-- Model-specific pricing calculations
-- Performance metrics and analysis efficiency reporting
-- Detailed cost breakdowns per agent and analysis run
+- Pre-analysis repository scanning to understand structure and complexity
+- Language and framework detection
+- File analysis and categorization
+- Smart agent recommendations based on project characteristics
+- Analysis time estimation and optimization suggestions
 
 ## Installation
 
@@ -124,17 +124,16 @@ Example in Claude:
 > "What's the structure of the repository at /path/to/project?"
 
 ### 4. Scan Repository (NEW)
-Pre-scans a repository to estimate analysis cost and complexity before running full analysis.
+Analyzes repository structure, detects languages/frameworks, and provides intelligent recommendations for analysis.
 
 ```
 Tool: scan_repository
 Parameters:
 - path: Path to the repository
-- model: (optional) Model to use for cost estimation (claude-3-5-sonnet-20241022 or claude-3-5-haiku-20241022)
 ```
 
 Example in Claude:
-> "Scan the repository at /path/to/project to estimate analysis costs"
+> "Scan the repository at /path/to/project to understand its structure and get analysis recommendations"
 
 ## Configuration
 
@@ -155,13 +154,7 @@ The analyzer also respects `.gitignore` files automatically.
 
 ### Environment Variables
 
-For AI-powered analysis (recommended), set your Anthropic API key:
-
-```bash
-export ANTHROPIC_API_KEY=your-api-key-here
-```
-
-Without an API key, the analyzer will use pattern-matching fallbacks which may be less accurate.
+The Code Analyzer MCP uses Claude Code's built-in LLM capabilities, so no external API keys are required. All analysis is performed using Claude's integrated AI within your existing Claude subscription.
 
 ## Available Agents
 
@@ -243,8 +236,8 @@ Without an API key, the analyzer will use pattern-matching fallbacks which may b
 - Check that no console.log statements are interfering with MCP protocol
 
 **Analysis seems incomplete**
-- Set `ANTHROPIC_API_KEY` for AI-powered analysis
 - Check file exclusion patterns in `.codeanalyzer` or `.gitignore`
+- Ensure the repository contains analyzable code files
 
 ## Development
 

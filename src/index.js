@@ -12,9 +12,6 @@ import { glob } from 'glob';
 import { RepoAnalyzer } from './utils/repo-analyzer.js';
 import { ExclusionManager } from './utils/exclusion-manager.js';
 import { LLMInterface } from './utils/llm-interface.js';
-import { CostCalculator } from './utils/cost-calculator.js';
-import { AnalysisMetrics } from './utils/analysis-metrics.js';
-import { MetaReportGenerator } from './utils/meta-report-generator.js';
 import { RepoScanner } from './utils/repo-scanner.js';
 
 // Agent configurations
@@ -102,10 +99,6 @@ class CodeAnalyzerMCP {
     this.repoAnalyzer = new RepoAnalyzer();
     this.exclusionManager = new ExclusionManager(process.cwd());
     this.llmInterface = new LLMInterface();
-    this.costCalculator = new CostCalculator();
-    this.analysisMetrics = new AnalysisMetrics();
-    this.metaReportGenerator = new MetaReportGenerator();
-    this.repoScanner = new RepoScanner();
   }
 
   setupHandlers() {
@@ -175,19 +168,13 @@ class CodeAnalyzerMCP {
         },
         {
           name: 'scan_repository',
-          description: 'Pre-scan a repository to estimate analysis cost and complexity',
+          description: 'Scan a repository to understand its structure, complexity, and suggest optimal analysis approach',
           inputSchema: {
             type: 'object',
             properties: {
               path: {
                 type: 'string',
                 description: 'Path to the repository'
-              },
-              model: {
-                type: 'string',
-                enum: ['claude-3-5-sonnet-20241022', 'claude-3-5-haiku-20241022'],
-                description: 'Model to use for cost estimation',
-                default: 'claude-3-5-sonnet-20241022'
               }
             },
             required: ['path']
@@ -223,9 +210,6 @@ class CodeAnalyzerMCP {
     const { path: repoPath, agents = Object.keys(AGENT_CONFIGS), exclude = [] } = args;
 
     try {
-      // Initialize metrics for this analysis
-      this.analysisMetrics.startAnalysis();
-      const startTime = Date.now();
       // Set up exclusions
       this.exclusionManager.addPatterns(exclude);
       
@@ -453,20 +437,12 @@ class CodeAnalyzerMCP {
   }
 
   async scanRepository(args) {
-    const { path: repoPath, model = 'claude-3-5-sonnet-20241022' } = args;
+    const { path: repoPath } = args;
     
     try {
-      // Use the repo scanner to analyze the repository
-      const scanResult = await this.repoScanner.scanRepository(repoPath, {
-        model,
+      // Use the repo scanner to analyze the repository structure
+      const scanResult = await RepoScanner.scanRepository(repoPath, {
         excludePatterns: this.exclusionManager.patterns
-      });
-      
-      // Calculate estimated costs
-      const costEstimate = this.costCalculator.calculateCost({
-        inputTokens: scanResult.estimatedTokens,
-        outputTokens: Math.floor(scanResult.estimatedTokens * 0.3), // Estimate 30% output
-        model
       });
       
       return {
@@ -475,20 +451,21 @@ class CodeAnalyzerMCP {
           text: JSON.stringify({
             repository: repoPath,
             summary: scanResult.summary,
-            metrics: {
+            structure: {
               totalFiles: scanResult.totalFiles,
               analyzableFiles: scanResult.analyzableFiles,
               totalLines: scanResult.totalLines,
-              estimatedTokens: scanResult.estimatedTokens
+              languages: scanResult.languages || [],
+              frameworks: scanResult.frameworks || []
             },
-            costEstimate: {
-              model,
-              estimatedInputTokens: scanResult.estimatedTokens,
-              estimatedOutputTokens: Math.floor(scanResult.estimatedTokens * 0.3),
-              estimatedCost: `$${costEstimate.toFixed(2)}`,
-              breakdown: this.costCalculator.getModelPricing(model)
+            complexity: {
+              size: scanResult.totalFiles > 100 ? 'Large' : scanResult.totalFiles > 50 ? 'Medium' : 'Small',
+              estimatedAnalysisTime: scanResult.totalFiles > 100 ? '5-10 minutes' : scanResult.totalFiles > 50 ? '2-5 minutes' : '1-2 minutes'
             },
-            recommendations: scanResult.recommendations
+            recommendations: {
+              suggestedAgents: this.suggestAgents(scanResult),
+              analysisApproach: scanResult.totalFiles > 100 ? 'Consider analyzing in phases or focusing on specific areas' : 'Full repository analysis recommended'
+            }
           }, null, 2)
         }]
       };

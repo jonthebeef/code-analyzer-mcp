@@ -1,12 +1,11 @@
 import { readFileSync, statSync } from 'fs';
 import { glob } from 'glob';
 import { join, extname } from 'path';
-import { CostCalculator } from './cost-calculator.js';
 import { PathValidator } from './path-validator.js';
 
 /**
- * Repository scanner for pre-analysis cost estimation and repository analysis.
- * Scans repositories to provide cost estimates and size analysis before running full analysis.
+ * Repository scanner for analyzing repository structure and metadata.
+ * Scans repositories to provide comprehensive information about file counts, languages, frameworks, and structure.
  */
 export class RepoScanner {
   
@@ -62,8 +61,7 @@ export class RepoScanner {
       patterns = this.DEFAULT_PATTERNS,
       exclusions = this.DEFAULT_EXCLUSIONS,
       maxFiles = 1000,
-      includeContent = false,
-      model = 'claude-sonnet-4-20250514'
+      includeContent = false
     } = options;
 
     // Validate repository path
@@ -75,14 +73,11 @@ export class RepoScanner {
     // Analyze files
     const fileAnalysis = await this.analyzeFiles(files, includeContent);
     
-    // Calculate cost estimates
-    const costEstimate = this.calculateCostEstimates(fileAnalysis, model);
-    
     // Generate repository statistics
     const repoStats = this.generateRepositoryStats(fileAnalysis);
     
-    // Generate warnings and recommendations
-    const warnings = this.generateWarnings(fileAnalysis, costEstimate);
+    // Generate insights and recommendations
+    const insights = this.generateInsights(fileAnalysis);
     
     return {
       repositoryPath: validatedPath,
@@ -90,30 +85,22 @@ export class RepoScanner {
       summary: {
         totalFiles: files.length,
         totalSize: fileAnalysis.totalSize,
-        averageFileSize: fileAnalysis.averageSize,
-        estimatedTokens: costEstimate.totalTokens,
-        estimatedCost: costEstimate.totalCost
+        averageFileSize: fileAnalysis.averageSize
       },
       files: fileAnalysis.files,
       statistics: repoStats,
-      costEstimate,
-      warnings,
-      recommendations: this.generateRecommendations(fileAnalysis, costEstimate),
-      modelInfo: {
-        model,
-        modelName: CostCalculator.PRICING[model]?.name || model,
-        limits: CostCalculator.getTokenLimits(model)
-      }
+      insights,
+      frameworks: this.detectFrameworks(fileAnalysis),
+      languages: this.detectLanguages(fileAnalysis)
     };
   }
 
   /**
-   * Quick scan for basic repository information and cost estimate
+   * Quick scan for basic repository information
    * @param {string} repoPath - Path to repository
-   * @param {string} model - Model to use for cost calculation
    * @returns {Promise<Object>} Quick scan results
    */
-  static async quickScan(repoPath, model = 'claude-sonnet-4-20250514') {
+  static async quickScan(repoPath) {
     const validatedPath = PathValidator.validateRepositoryPath(repoPath);
     
     // Find files without reading content
@@ -122,15 +109,20 @@ export class RepoScanner {
     let totalSize = 0;
     let fileCount = 0;
     const sizeBuckets = { small: 0, medium: 0, large: 0, huge: 0 };
+    const extensions = new Map();
     
     for (const file of files) {
       try {
         const fullPath = join(validatedPath, file);
         const stats = statSync(fullPath);
         const size = stats.size;
+        const ext = extname(file).toLowerCase();
         
         totalSize += size;
         fileCount++;
+        
+        // Track extensions
+        extensions.set(ext, (extensions.get(ext) || 0) + 1);
         
         // Categorize by size
         if (size <= this.SIZE_LIMITS.small) sizeBuckets.small++;
@@ -144,22 +136,13 @@ export class RepoScanner {
       }
     }
     
-    const estimatedTokens = CostCalculator.estimateTokens('x'.repeat(totalSize));
-    const costEstimate = CostCalculator.calculateCost(estimatedTokens, Math.ceil(estimatedTokens * 0.1), model);
-    
     return {
       fileCount,
       totalSize,
       averageFileSize: fileCount > 0 ? totalSize / fileCount : 0,
       sizeBuckets,
-      estimatedTokens,
-      estimatedCost: costEstimate.totalCost,
-      isLargeRepository: fileCount > 100 || totalSize > 5 * 1024 * 1024, // 5MB
-      exceedsRecommendedLimits: estimatedTokens > 200000, // 200k tokens
-      modelInfo: {
-        model,
-        modelName: CostCalculator.PRICING[model]?.name || model
-      }
+      extensions: Object.fromEntries(extensions),
+      isLargeRepository: fileCount > 100 || totalSize > 5 * 1024 * 1024 // 5MB
     };
   }
 
@@ -195,7 +178,7 @@ export class RepoScanner {
   }
 
   /**
-   * Analyze individual files for size, content, and token estimates
+   * Analyze individual files for size, content, and metadata
    * @param {Array} files - Array of file paths
    * @param {boolean} includeContent - Whether to read file content
    * @returns {Promise<Object>} File analysis results
@@ -204,7 +187,6 @@ export class RepoScanner {
   static async analyzeFiles(files, includeContent = false) {
     const fileAnalysis = [];
     let totalSize = 0;
-    let totalTokens = 0;
     const extensions = new Map();
     const sizeCategories = { small: 0, medium: 0, large: 0, huge: 0 };
     
@@ -216,34 +198,30 @@ export class RepoScanner {
         
         // Read content if requested and file is not too large
         let content = null;
-        let tokens = 0;
+        let lineCount = 0;
         if (includeContent && size < this.SIZE_LIMITS.huge) {
           try {
             content = readFileSync(filePath, 'utf8');
-            tokens = CostCalculator.estimateTokens(content);
+            lineCount = content.split('\n').length;
           } catch (error) {
             // Skip files that can't be read as text
           }
-        } else {
-          // Estimate tokens based on file size
-          tokens = CostCalculator.estimateTokens('x'.repeat(size));
         }
         
         const fileInfo = {
           path: filePath,
           size,
           extension: ext,
-          estimatedTokens: tokens,
+          lineCount,
           sizeCategory: this.categorizeSizeBySize(size),
           isLarge: size > this.SIZE_LIMITS.large,
-          needsTruncation: tokens > 6000, // Rough truncation threshold
-          content: includeContent ? content : null
+          content: includeContent ? content : null,
+          lastModified: stats.mtime
         };
         
         fileAnalysis.push(fileInfo);
         
         totalSize += size;
-        totalTokens += tokens;
         
         // Track extensions
         extensions.set(ext, (extensions.get(ext) || 0) + 1);
@@ -259,58 +237,136 @@ export class RepoScanner {
     return {
       files: fileAnalysis,
       totalSize,
-      totalTokens,
       averageSize: files.length > 0 ? totalSize / files.length : 0,
-      averageTokens: files.length > 0 ? totalTokens / files.length : 0,
       extensions: Object.fromEntries(extensions),
       sizeCategories
     };
   }
 
   /**
-   * Calculate cost estimates for different scenarios
+   * Detect frameworks used in the repository
    * @param {Object} fileAnalysis - File analysis results
-   * @param {string} model - Model to use
-   * @returns {Object} Cost estimates
+   * @returns {Object} Detected frameworks
    * @private
    */
-  static calculateCostEstimates(fileAnalysis, model) {
-    const totalTokens = fileAnalysis.totalTokens;
-    const outputTokens = Math.ceil(totalTokens * 0.1); // Estimate 10% output
+  static detectFrameworks(fileAnalysis) {
+    const frameworks = {
+      frontend: [],
+      backend: [],
+      testing: [],
+      build: []
+    };
     
-    const baseCost = CostCalculator.calculateCost(totalTokens, outputTokens, model);
+    const files = fileAnalysis.files;
+    const extensions = fileAnalysis.extensions;
     
-    // Calculate costs for different models
-    const modelComparisons = [];
-    for (const [modelId, pricing] of Object.entries(CostCalculator.PRICING)) {
-      const cost = CostCalculator.calculateCost(totalTokens, outputTokens, modelId);
-      modelComparisons.push({
-        model: modelId,
-        modelName: pricing.name,
-        estimatedCost: cost.totalCost,
-        inputCost: cost.inputCost,
-        outputCost: cost.outputCost,
-        suitable: totalTokens <= pricing.contextWindow
-      });
+    // Check for package.json to detect Node.js dependencies
+    const packageJsonFiles = files.filter(f => f.path.endsWith('package.json'));
+    
+    // React/Next.js indicators
+    if (extensions['.jsx'] || extensions['.tsx'] || 
+        files.some(f => f.path.includes('package.json'))) {
+      if (files.some(f => f.path.includes('next.config'))) {
+        frameworks.frontend.push('Next.js');
+      } else if (extensions['.jsx'] || extensions['.tsx']) {
+        frameworks.frontend.push('React');
+      }
     }
     
-    modelComparisons.sort((a, b) => a.estimatedCost - b.estimatedCost);
+    // Vue.js
+    if (extensions['.vue']) frameworks.frontend.push('Vue.js');
+    
+    // Angular
+    if (files.some(f => f.path.includes('angular.json')) || 
+        extensions['.component.ts']) {
+      frameworks.frontend.push('Angular');
+    }
+    
+    // Backend frameworks
+    if (files.some(f => f.path.includes('express'))) frameworks.backend.push('Express.js');
+    if (files.some(f => f.path.includes('fastify'))) frameworks.backend.push('Fastify');
+    if (extensions['.py']) {
+      if (files.some(f => f.path.includes('django'))) frameworks.backend.push('Django');
+      if (files.some(f => f.path.includes('flask'))) frameworks.backend.push('Flask');
+      if (files.some(f => f.path.includes('fastapi'))) frameworks.backend.push('FastAPI');
+    }
+    
+    // Testing frameworks
+    if (files.some(f => f.path.includes('jest'))) frameworks.testing.push('Jest');
+    if (files.some(f => f.path.includes('cypress'))) frameworks.testing.push('Cypress');
+    if (files.some(f => f.path.includes('playwright'))) frameworks.testing.push('Playwright');
+    
+    // Build tools
+    if (files.some(f => f.path.includes('webpack'))) frameworks.build.push('Webpack');
+    if (files.some(f => f.path.includes('vite'))) frameworks.build.push('Vite');
+    if (files.some(f => f.path.includes('rollup'))) frameworks.build.push('Rollup');
+    
+    return frameworks;
+  }
+  
+  /**
+   * Detect programming languages used in the repository
+   * @param {Object} fileAnalysis - File analysis results
+   * @returns {Object} Language statistics
+   * @private
+   */
+  static detectLanguages(fileAnalysis) {
+    const languageMap = {
+      '.js': 'JavaScript',
+      '.jsx': 'JavaScript (React)',
+      '.ts': 'TypeScript',
+      '.tsx': 'TypeScript (React)',
+      '.py': 'Python',
+      '.java': 'Java',
+      '.cpp': 'C++',
+      '.c': 'C',
+      '.cs': 'C#',
+      '.go': 'Go',
+      '.rs': 'Rust',
+      '.php': 'PHP',
+      '.rb': 'Ruby',
+      '.swift': 'Swift',
+      '.kt': 'Kotlin',
+      '.scala': 'Scala',
+      '.html': 'HTML',
+      '.css': 'CSS',
+      '.scss': 'SCSS',
+      '.sass': 'Sass',
+      '.less': 'Less',
+      '.vue': 'Vue.js',
+      '.sql': 'SQL',
+      '.sh': 'Shell',
+      '.yaml': 'YAML',
+      '.yml': 'YAML',
+      '.json': 'JSON',
+      '.xml': 'XML',
+      '.md': 'Markdown'
+    };
+    
+    const languages = {};
+    let totalFiles = 0;
+    
+    for (const [ext, count] of Object.entries(fileAnalysis.extensions)) {
+      const language = languageMap[ext];
+      if (language) {
+        languages[language] = (languages[language] || 0) + count;
+        totalFiles += count;
+      }
+    }
+    
+    // Calculate percentages
+    const languageStats = Object.entries(languages)
+      .map(([lang, count]) => ({
+        language: lang,
+        fileCount: count,
+        percentage: totalFiles > 0 ? (count / totalFiles * 100).toFixed(1) : 0
+      }))
+      .sort((a, b) => b.fileCount - a.fileCount);
     
     return {
-      totalTokens,
-      outputTokens,
-      totalCost: baseCost.totalCost,
-      inputCost: baseCost.inputCost,
-      outputCost: baseCost.outputCost,
-      costPerFile: fileAnalysis.files.length > 0 ? baseCost.totalCost / fileAnalysis.files.length : 0,
-      costPerKB: fileAnalysis.totalSize > 0 ? baseCost.totalCost / (fileAnalysis.totalSize / 1024) : 0,
-      modelComparisons,
-      cheapestModel: modelComparisons.find(m => m.suitable),
-      currentModel: {
-        model,
-        modelName: CostCalculator.PRICING[model]?.name || model,
-        cost: baseCost.totalCost
-      }
+      primary: languageStats[0]?.language || 'Unknown',
+      distribution: languageStats,
+      totalFiles
     };
   }
 
@@ -327,130 +383,85 @@ export class RepoScanner {
     const largestFiles = [...files]
       .sort((a, b) => b.size - a.size)
       .slice(0, 10)
-      .map(f => ({ path: f.path, size: f.size, tokens: f.estimatedTokens }));
+      .map(f => ({ path: f.path, size: f.size, lineCount: f.lineCount }));
     
-    // Files that need truncation
-    const truncationCandidates = files.filter(f => f.needsTruncation);
+    // Recent files (last 30 days)
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const recentFiles = files.filter(f => f.lastModified > thirtyDaysAgo);
     
     // Extension breakdown
     const extensionStats = Object.entries(fileAnalysis.extensions)
       .map(([ext, count]) => ({ extension: ext, count }))
       .sort((a, b) => b.count - a.count);
     
+    // Calculate total lines of code
+    const totalLines = files.reduce((sum, f) => sum + (f.lineCount || 0), 0);
+    
     return {
       fileCount: files.length,
       totalSize: fileAnalysis.totalSize,
       averageFileSize: fileAnalysis.averageSize,
+      totalLines,
+      averageLines: files.length > 0 ? totalLines / files.length : 0,
       sizeDistribution: fileAnalysis.sizeCategories,
       largestFiles,
-      truncationCandidates: {
-        count: truncationCandidates.length,
-        percentage: files.length > 0 ? (truncationCandidates.length / files.length) * 100 : 0,
-        files: truncationCandidates.slice(0, 5).map(f => ({ path: f.path, tokens: f.estimatedTokens }))
+      recentActivity: {
+        filesModifiedLast30Days: recentFiles.length,
+        percentage: files.length > 0 ? (recentFiles.length / files.length) * 100 : 0
       },
       extensionBreakdown: extensionStats
     };
   }
 
   /**
-   * Generate warnings based on analysis
+   * Generate insights based on analysis
    * @param {Object} fileAnalysis - File analysis results
-   * @param {Object} costEstimate - Cost estimates
-   * @returns {Array} Array of warnings
+   * @returns {Array} Array of insights
    * @private
    */
-  static generateWarnings(fileAnalysis, costEstimate) {
-    const warnings = [];
+  static generateInsights(fileAnalysis) {
+    const insights = [];
     
-    // High cost warning
-    if (costEstimate.totalCost > 10.00) {
-      warnings.push({
-        type: 'cost',
-        severity: 'high',
-        message: `High estimated cost: $${costEstimate.totalCost.toFixed(2)}. Consider using a cheaper model or reducing scope.`
-      });
-    } else if (costEstimate.totalCost > 5.00) {
-      warnings.push({
-        type: 'cost',
-        severity: 'medium',
-        message: `Moderate cost: $${costEstimate.totalCost.toFixed(2)}. Review cost estimate before proceeding.`
-      });
-    }
-    
-    // Large file warnings
+    // Large file insights
     const largeFiles = fileAnalysis.files.filter(f => f.size > this.SIZE_LIMITS.large);
     if (largeFiles.length > 0) {
-      warnings.push({
+      insights.push({
         type: 'fileSize',
-        severity: 'medium',
-        message: `${largeFiles.length} large files detected. Analysis may require truncation.`,
+        severity: 'info',
+        message: `${largeFiles.length} large files detected (>100KB). These may need special attention during analysis.`,
         files: largeFiles.slice(0, 3).map(f => f.path)
       });
     }
     
-    // Many files warning
+    // Repository scale insight
     if (fileAnalysis.files.length > 100) {
-      warnings.push({
-        type: 'fileCount',
-        severity: 'medium',
-        message: `Large repository: ${fileAnalysis.files.length} files. Consider using exclusion patterns.`
+      insights.push({
+        type: 'scale',
+        severity: 'info',
+        message: `Large repository: ${fileAnalysis.files.length} files. This is a substantial codebase.`
+      });
+    } else if (fileAnalysis.files.length < 10) {
+      insights.push({
+        type: 'scale',
+        severity: 'info',
+        message: `Small repository: ${fileAnalysis.files.length} files. This is a compact codebase.`
       });
     }
     
-    // Token limit warning
-    const tokenLimits = CostCalculator.getTokenLimits(costEstimate.currentModel.model);
-    if (costEstimate.totalTokens > tokenLimits.safeInputLimit) {
-      warnings.push({
-        type: 'tokenLimit',
-        severity: 'high',
-        message: `Token count (${costEstimate.totalTokens.toLocaleString()}) exceeds safe limits for ${costEstimate.currentModel.modelName}.`
+    // Binary/non-text files
+    const binaryExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.ico', '.pdf', '.zip', '.tar', '.gz'];
+    const binaryFiles = fileAnalysis.files.filter(f => binaryExtensions.includes(f.extension));
+    if (binaryFiles.length > 0) {
+      insights.push({
+        type: 'binaryFiles',
+        severity: 'info',
+        message: `${binaryFiles.length} binary files detected. These will be excluded from text analysis.`
       });
     }
     
-    return warnings;
+    return insights;
   }
 
-  /**
-   * Generate recommendations based on analysis
-   * @param {Object} fileAnalysis - File analysis results
-   * @param {Object} costEstimate - Cost estimates
-   * @returns {Array} Array of recommendations
-   * @private
-   */
-  static generateRecommendations(fileAnalysis, costEstimate) {
-    const recommendations = [];
-    
-    // Model recommendation
-    const cheapest = costEstimate.modelComparisons.find(m => m.suitable);
-    if (cheapest && cheapest.model !== costEstimate.currentModel.model) {
-      const savings = costEstimate.currentModel.cost - cheapest.estimatedCost;
-      if (savings > 1.00) {
-        recommendations.push({
-          type: 'model',
-          message: `Consider using ${cheapest.modelName} to save $${savings.toFixed(2)} (${((savings/costEstimate.currentModel.cost)*100).toFixed(1)}%)`
-        });
-      }
-    }
-    
-    // File exclusion recommendation
-    const truncationCandidates = fileAnalysis.files.filter(f => f.needsTruncation);
-    if (truncationCandidates.length > fileAnalysis.files.length * 0.3) {
-      recommendations.push({
-        type: 'exclusion',
-        message: `${truncationCandidates.length} files may be truncated. Consider adding exclusion patterns for large generated files.`
-      });
-    }
-    
-    // Performance recommendation
-    if (fileAnalysis.files.length > 50) {
-      recommendations.push({
-        type: 'performance',
-        message: 'Large repository detected. Analysis may take several minutes. Consider running during off-hours.'
-      });
-    }
-    
-    return recommendations;
-  }
 
   /**
    * Categorize file size
@@ -471,21 +482,24 @@ export class RepoScanner {
    * @returns {string} Formatted display text
    */
   static formatScanResults(scanResults) {
-    const { summary, warnings, recommendations, modelInfo } = scanResults;
+    const { summary, insights, languages, frameworks } = scanResults;
     
-    let output = `📊 Repository Scan Results:\n`;
+    let output = `Repository Scan Results:\n`;
     output += `   Files: ${summary.totalFiles}\n`;
     output += `   Size: ${this.formatBytes(summary.totalSize)}\n`;
-    output += `   Estimated Cost: $${summary.estimatedCost.toFixed(4)} (${modelInfo.modelName})\n`;
+    output += `   Primary Language: ${languages.primary}\n`;
     
-    if (warnings.length > 0) {
-      output += `\n⚠️ Warnings:\n`;
-      warnings.forEach(w => output += `   - ${w.message}\n`);
+    if (frameworks.frontend.length > 0) {
+      output += `   Frontend: ${frameworks.frontend.join(', ')}\n`;
     }
     
-    if (recommendations.length > 0) {
-      output += `\n💡 Recommendations:\n`;
-      recommendations.forEach(r => output += `   - ${r.message}\n`);
+    if (frameworks.backend.length > 0) {
+      output += `   Backend: ${frameworks.backend.join(', ')}\n`;
+    }
+    
+    if (insights.length > 0) {
+      output += `\nInsights:\n`;
+      insights.forEach(i => output += `   - ${i.message}\n`);
     }
     
     return output;

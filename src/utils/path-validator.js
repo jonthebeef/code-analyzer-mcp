@@ -299,6 +299,87 @@ export class PathValidator {
   }
 
   /**
+   * Validates a repository path for analysis operations.
+   * Less restrictive than output path validation, but still prevents path traversal attacks.
+   * 
+   * @param {string} repoPath - Repository path to validate
+   * @returns {string} Validated and normalized absolute path
+   * @throws {Error} If the path is invalid or potentially dangerous
+   */
+  static validateRepositoryPath(repoPath) {
+    if (!repoPath || typeof repoPath !== 'string') {
+      throw new Error('Repository path must be a non-empty string');
+    }
+
+    // Sanitize the input path
+    const sanitizedPath = this.sanitizePath(repoPath);
+    
+    // Check for dangerous patterns (less restrictive than output validation)
+    this.checkForRepositoryDangerousPatterns(sanitizedPath);
+    
+    // Resolve to absolute path
+    const resolvedPath = resolve(sanitizedPath);
+    
+    // Verify the path exists and is a directory
+    if (!existsSync(resolvedPath)) {
+      throw new Error(`Repository path does not exist: ${resolvedPath}`);
+    }
+    
+    const stats = statSync(resolvedPath);
+    if (!stats.isDirectory()) {
+      throw new Error(`Repository path is not a directory: ${resolvedPath}`);
+    }
+    
+    return resolvedPath;
+  }
+
+  /**
+   * Checks for dangerous patterns specific to repository path validation.
+   * More permissive than output path validation but still secure.
+   * 
+   * @param {string} path - Path to check
+   * @throws {Error} If dangerous patterns are found
+   * @private
+   */
+  static checkForRepositoryDangerousPatterns(path) {
+    // Check for null bytes and control characters
+    if (/[\x00-\x1F\x7F]/.test(path)) {
+      throw new Error('Repository path contains invalid control characters or null bytes');
+    }
+
+    // Check for very long paths
+    if (path.length > 260) {
+      throw new Error('Repository path exceeds maximum allowed length (260 characters)');
+    }
+
+    // Check for template injection patterns
+    if (/\$\{.*\}/.test(path) || /\%\{.*\}/.test(path)) {
+      throw new Error('Repository path contains template injection patterns');
+    }
+
+    // Block obvious system directories that shouldn't be analyzed
+    if (isAbsolute(path)) {
+      const normalizedPath = path.toLowerCase();
+      const restrictedPaths = [
+        '/etc',
+        '/bin', 
+        '/usr/bin',
+        '/sbin',
+        '/var/log',
+        '/root',
+        'c:\\windows\\system32',
+        'c:\\program files',
+      ];
+
+      for (const restrictedPath of restrictedPaths) {
+        if (normalizedPath.startsWith(restrictedPath)) {
+          throw new Error(`Repository path points to restricted system directory: ${restrictedPath}`);
+        }
+      }
+    }
+  }
+
+  /**
    * Validates a file path within an already validated directory.
    * 
    * @param {string} filePath - File path to validate
